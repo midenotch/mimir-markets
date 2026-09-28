@@ -298,7 +298,8 @@ async function main(): Promise<void> {
   }
   logger.info("═══════════════════════════════════════════════\n");
 
-  const safePoll = () => reportingPoll("council", "council", POLL_INTERVAL_MS / 1000, poll);
+  const safePoll = () =>
+    reportingPoll("council", "council", POLL_INTERVAL_MS / 1000, poll, { pause: "council_worker" });
 
   await safePoll();
   setInterval(safePoll, POLL_INTERVAL_MS);
