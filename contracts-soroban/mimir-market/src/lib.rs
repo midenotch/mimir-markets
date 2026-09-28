@@ -24,12 +24,20 @@ pub use contract::{MimirMarket, MimirMarketClient};
 pub use types::*;
 
 #[cfg(test)]
+mod test_challenge_lock;
+#[cfg(test)]
 mod test_common;
 #[cfg(test)]
 mod test_decimals;
+#[cfg(test)]
+mod test_fee_rounding;
 #[cfg(test)]
 mod test_fees;
 #[cfg(test)]
 mod test_lifecycle;
 #[cfg(test)]
+mod test_pagination;
+#[cfg(test)]
 mod test_settlement;
+#[cfg(test)]
+mod test_verdict;

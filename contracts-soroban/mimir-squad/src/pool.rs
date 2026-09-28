@@ -7,8 +7,27 @@ use crate::events;
 use crate::storage;
 use crate::types::{
     ClaimResult, Error, Market, BPS_DIVISOR, MAX_DURATION, MAX_FEE_BPS, MAX_PARTICIPANTS_PER_SIDE,
-    MIN_DURATION, RESULT_CANCELLED, SIDE_A, SIDE_B,
+    MAX_QUESTION_BYTES, MAX_SQUAD_MEMBERS, MIN_DURATION, RESULT_CANCELLED, SIDE_A, SIDE_B,
 };
+
+/// The fee on one winning claim: `floor(profit * fee_bps / BPS_DIVISOR)`.
+///
+/// Fees apply to PROFIT only, so a winner never receives less than their
+/// principal. The division truncates, so the fee rounds DOWN and the fractional
+/// remainder stays with the participant: `net = gross - fee`, so fee rounding
+/// never leaves anything behind in escrow. `claim` and `preview_claim` both use
+/// this one function, so a preview cannot round differently from the payout.
+pub(crate) fn profit_fee(principal: i128, gross: i128, fee_bps: u32) -> Result<i128, Error> {
+    let profit = if gross > principal {
+        gross - principal
+    } else {
+        0
+    };
+    profit
+        .checked_mul(fee_bps as i128)
+        .map(|p| p / BPS_DIVISOR)
+        .ok_or(Error::Overflow)
+}
 
 fn require_side(side: u32) -> Result<(), Error> {
     if side != SIDE_A && side != SIDE_B {
@@ -16,6 +35,33 @@ fn require_side(side: u32) -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// Invariant: escrow accounting must conserve funds.
+///
+/// After resolve, `remaining_escrow == pool_a + pool_b`.
+/// After each claim, `remaining_escrow` never goes negative and never exceeds
+/// the original pools. Fees are accrued separately and are not part of
+/// `remaining_escrow`.
+fn assert_market_conservation(market: &Market) -> Result<(), Error> {
+    if market.remaining_escrow < 0 {
+        return Err(Error::ConservationViolation);
+    }
+    if market.pool_a < 0 || market.pool_b < 0 {
+        return Err(Error::ConservationViolation);
+    }
+    if market.resolved {
+        let total = market
+            .pool_a
+            .checked_add(market.pool_b)
+            .ok_or(Error::Overflow)?;
+        // Remaining escrow must never exceed the resolved pool total.
+        if market.remaining_escrow > total {
+            return Err(Error::ConservationViolation);
+        }
+    }
+    Ok(())
+}
+
 
 pub fn initialize(
     env: &Env,
@@ -43,6 +89,9 @@ pub fn create_market(
 
     if question.is_empty() {
         return Err(Error::EmptyQuestion);
+    }
+    if question.len() > MAX_QUESTION_BYTES {
+        return Err(Error::QuestionTooLong);
     }
     let now = env.ledger().timestamp();
     let earliest = now.checked_add(MIN_DURATION).ok_or(Error::Overflow)?;
@@ -107,6 +156,18 @@ pub fn deposit(
     // topping up an existing position never consumes a slot.
     let previous = storage::deposit_of(env, market_id, side, &participant);
     if previous == 0 {
+        // ── Total-membership cap (across both sides) ──────────────────────
+        // This fires before the per-side check so callers get a clear signal
+        // that the squad itself is full, not just the target side.
+        let total = market
+            .participants_a
+            .checked_add(market.participants_b)
+            .ok_or(Error::Overflow)?;
+        if total >= MAX_SQUAD_MEMBERS {
+            return Err(Error::SquadFull);
+        }
+
+        // ── Per-side cap ──────────────────────────────────────────────────
         let count = if side == SIDE_A {
             market.participants_a
         } else {
@@ -132,6 +193,23 @@ pub fn deposit(
         market.pool_b += amount;
     }
     storage::set_market(env, market_id, &market);
+
+    // Emit a SquadFull event when this deposit fills the very last available
+    // slot so that off-chain indexers can react without polling.  We emit this
+    // *after* the state write so the stored counts are already correct.
+    if previous == 0 {
+        let total_now = market
+            .participants_a
+            .checked_add(market.participants_b)
+            .ok_or(Error::Overflow)?;
+        if total_now == MAX_SQUAD_MEMBERS {
+            events::SquadFull {
+                market_id,
+                total_members: total_now,
+            }
+            .publish(env);
+        }
+    }
 
     events::Deposited {
         market_id,
@@ -160,6 +238,9 @@ pub fn withdraw_before_deadline(
     }
 
     let balance = storage::deposit_of(env, market_id, side, &participant);
+    if balance == 0 {
+        return Ok(());
+    }
     if amount <= 0 || amount > balance {
         return Err(Error::BadAmount);
     }
@@ -192,11 +273,50 @@ pub fn withdraw_before_deadline(
     Ok(())
 }
 
+
+pub fn transition_deadline(env: &Env, market_id: u64) -> Result<(), Error> {
+    let mut market = storage::get_market(env, market_id)?;
+    if market.resolved {
+        return Err(Error::Locked);
+    }
+    if market.pool_a > 0 && market.pool_b > 0 {
+        return Ok(());
+    }
+    if env.ledger().timestamp() < market.deadline {
+        return Err(Error::Locked);
+    }
+
+    market.resolved = true;
+    market.result = RESULT_CANCELLED;
+    market.remaining_escrow = market
+        .pool_a
+        .checked_add(market.pool_b)
+        .ok_or(Error::Overflow)?;
+    assert_market_conservation(&market)?;
+    storage::set_market(env, market_id, &market);
+
+    events::Resolved {
+        market_id,
+        result: RESULT_CANCELLED,
+        pool_a: market.pool_a,
+        pool_b: market.pool_b,
+    }
+    .publish(env);
+    Ok(())
+}
+
 pub fn resolve(env: &Env, market_id: u64, result: u32) -> Result<(), Error> {
     storage::oracle(env)?.require_auth();
 
     let mut market = storage::get_market(env, market_id)?;
-    if market.resolved || env.ledger().timestamp() < market.deadline {
+    if market.resolved {
+        if market.result == result {
+            return Ok(());
+        } else {
+            return Err(Error::NotResolvable);
+        }
+    }
+    if env.ledger().timestamp() < market.deadline {
         return Err(Error::NotResolvable);
     }
     if result != SIDE_A && result != SIDE_B && result != RESULT_CANCELLED {
@@ -215,7 +335,11 @@ pub fn resolve(env: &Env, market_id: u64, result: u32) -> Result<(), Error> {
 
     market.resolved = true;
     market.result = result;
-    market.remaining_escrow = market.pool_a + market.pool_b;
+    market.remaining_escrow = market
+        .pool_a
+        .checked_add(market.pool_b)
+        .ok_or(Error::Overflow)?;
+    assert_market_conservation(&market)?;
     storage::set_market(env, market_id, &market);
 
     events::Resolved {
@@ -242,7 +366,7 @@ pub fn claim(
         return Err(Error::NotClaimable);
     }
     if storage::has_claimed(env, market_id, side, &participant) {
-        return Err(Error::AlreadyClaimed);
+        return Ok(0);
     }
 
     let principal = storage::deposit_of(env, market_id, side, &participant);
@@ -282,19 +406,20 @@ pub fn claim(
                 .ok_or(Error::Overflow)?
         };
 
-        // Fees apply to PROFIT only, so a winner never receives less than their
-        // principal.
-        let profit = if gross > principal { gross - principal } else { 0 };
-        fee = profit
-            .checked_mul(market.fee_bps as i128)
-            .map(|p| p / BPS_DIVISOR)
-            .ok_or(Error::Overflow)?;
+        fee = profit_fee(principal, gross, market.fee_bps)?;
     }
 
-    market.remaining_escrow -= gross;
+    market.remaining_escrow = market
+        .remaining_escrow
+        .checked_sub(gross)
+        .ok_or(Error::ConservationViolation)?;
+    assert_market_conservation(&market)?;
     storage::set_market(env, market_id, &market);
 
-    let net = gross - fee;
+    let net = gross.checked_sub(fee).ok_or(Error::ConservationViolation)?;
+    if net < 0 {
+        return Err(Error::ConservationViolation);
+    }
     storage::set_accrued_fees(env, storage::accrued_fees(env) + fee);
 
     let usdc = storage::usdc(env)?;
@@ -317,7 +442,7 @@ pub fn claim_fees(env: &Env) -> Result<i128, Error> {
 
     let amount = storage::accrued_fees(env);
     if amount <= 0 {
-        return Err(Error::NoFees);
+        return Ok(0);
     }
     storage::set_accrued_fees(env, 0); // effects before interaction
 
@@ -381,11 +506,7 @@ pub fn preview_claim(
             .map(|p| p / winner_pool)
             .ok_or(Error::Overflow)?
     };
-    let profit = if gross > principal { gross - principal } else { 0 };
-    let fee = profit
-        .checked_mul(market.fee_bps as i128)
-        .map(|p| p / BPS_DIVISOR)
-        .ok_or(Error::Overflow)?;
+    let fee = profit_fee(principal, gross, market.fee_bps)?;
     Ok(ClaimResult {
         gross,
         fee,
