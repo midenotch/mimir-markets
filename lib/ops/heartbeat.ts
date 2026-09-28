@@ -18,6 +18,9 @@
  */
 
 import { getSyncMeta, setSyncMeta, isDbConfigured } from "@/lib/db";
+import { createWorkerLogger } from "./logger";
+
+const logger = createWorkerLogger("ops-heartbeat");
 
 import {
   decodeHeartbeat,
@@ -63,7 +66,7 @@ export async function beat(
       }),
     );
   } catch (err) {
-    console.warn(`[ops] heartbeat write failed for ${worker}:`, err);
+    logger.warn(`heartbeat write failed for ${worker}`, { error: err });
   }
 }
 
@@ -84,7 +87,7 @@ export async function reportingPoll(
     await poll();
     await beat(worker, { intervalSec });
   } catch (err) {
-    console.error(`[${label}] poll failed, will retry next interval:`, err);
+    logger.error(`poll failed, will retry next interval`, { error: err, label });
     await beat(worker, { error: err, intervalSec });
   }
 }
@@ -142,7 +145,7 @@ export async function recordOutcome(
       }),
     );
   } catch (err) {
-    console.warn(`[ops] failure counter write failed for ${dependency}:`, err);
+    logger.warn(`failure counter write failed for ${dependency}`, { error: err });
   }
 }
 
@@ -204,7 +207,7 @@ async function safeGet(key: string): Promise<string | null> {
   try {
     return await getSyncMeta(key);
   } catch (err) {
-    console.warn(`[ops] sync_meta read failed for ${key}:`, err);
+    logger.warn(`sync_meta read failed for ${key}`, { error: err });
     return null;
   }
 }

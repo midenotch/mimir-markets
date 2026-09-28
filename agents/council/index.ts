@@ -39,6 +39,8 @@
 // rationale: each worker gets its own 20 RPM free-tier bucket.
 applyWorkerGeminiKey("COUNCIL_GEMINI_API_KEY");
 
+import { createWorkerLogger } from "../../lib/ops/logger";
+const logger = createWorkerLogger("council");
 import { requireAnyLLMKey, applyWorkerGeminiKey } from "../../lib/agent-bootstrap";
 import { getClaimCount, readClaimRaw } from "../../lib/contract";
 import { readAgentBalances } from "../../lib/agent-wallets";
@@ -143,7 +145,7 @@ const ACTIVE_PHILOSOPHERS: PersonaSpec[] = PHILOSOPHERS_ENABLED
 const ALL_ACTIVE = [...ACTIVE_PERSONAS, ...ACTIVE_PHILOSOPHERS];
 
 if (ALL_ACTIVE.length === 0) {
-  console.error("[council] No personas have wallets configured. Exiting.");
+  logger.error("[council] No personas have wallets configured. Exiting.");
   process.exit(1);
 }
 
@@ -168,7 +170,7 @@ async function poll(): Promise<void> {
   try {
     total = await getClaimCount();
   } catch (err) {
-    console.warn("[council] Failed to read the claim count:", err);
+    logger.warn("[council] Failed to read the claim count:", { error: err });
     return;
   }
 
@@ -195,7 +197,7 @@ async function poll(): Promise<void> {
     if (joinable) allClaims.push(claim);
   }
   if (allClaims.length === 0) {
-    console.log("[council] No joinable claims this round.");
+    logger.info("[council] No joinable claims this round.");
     return;
   }
 
@@ -262,19 +264,19 @@ async function poll(): Promise<void> {
 
 // ── Entry ─────────────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
-  console.log("═══════════════════════════════════════════════");
-  console.log("  Mimir Council — 10 AI personas as economic actors");
-  console.log(`  Contract       : ${CONTRACT_ID}`);
-  console.log(`  Network        : Stellar ${STELLAR_NETWORK}`);
-  console.log(`  LLM            : ${activeLLMProvider()} / ${activeLLMModel()} · key=${activeLLMKeyFingerprint()}`);
-  console.log(`  Active personas: ${ACTIVE_PERSONAS.length} / ${CLASSIC_PERSONAS.length}`);
-  console.log(`  Philosophers   : ${PHILOSOPHERS_ENABLED ? `${ACTIVE_PHILOSOPHERS.length} / ${PHILOSOPHER_PERSONAS.length}` : "off"}`);
-  console.log(`  Max claims/cycle: ${MAX_CLAIMS_PER_CYCLE}`);
-  console.log(`  Decision gap   : ${DECISION_DELAY_MS / 1000}s`);
-  console.log(`  Peer reads     : ${PEER_READS_ENABLED ? `${PEER_READS_PER_PERSONA}/persona via ${PEER_READS_BASE_URL}` : "off"}`);
-  console.log(`  Peer read gap  : ${PEER_READ_DELAY_MS / 1000}s`);
-  console.log(`  Poll every     : ${POLL_INTERVAL_MS / 1000}s`);
-  console.log("───────────────────────────────────────────────");
+  logger.info("═══════════════════════════════════════════════");
+  logger.info("  Mimir Council — 10 AI personas as economic actors");
+  logger.info(`  Contract       : ${CONTRACT_ID}`, { CONTRACT_ID: CONTRACT_ID });
+  logger.info(`  Network        : Stellar ${STELLAR_NETWORK}`, { STELLAR_NETWORK: STELLAR_NETWORK });
+  logger.info(`  LLM            : ${activeLLMProvider()} / ${activeLLMModel()} · key=${activeLLMKeyFingerprint()}`, { activeLLMProvider: activeLLMProvider(), activeLLMModel: activeLLMModel(), activeLLMKeyFingerprint: activeLLMKeyFingerprint() });
+  logger.info(`  Active personas: ${ACTIVE_PERSONAS.length} / ${CLASSIC_PERSONAS.length}`, { length: ACTIVE_PERSONAS.length, length: CLASSIC_PERSONAS.length });
+  logger.info(`  Philosophers   : ${PHILOSOPHERS_ENABLED ? `${ACTIVE_PHILOSOPHERS.length} / ${PHILOSOPHER_PERSONAS.length}` : "off"}`, { length: PHILOSOPHERS_ENABLED ? `${ACTIVE_PHILOSOPHERS.length, length: PHILOSOPHER_PERSONAS.length });
+  logger.info(`  Max claims/cycle: ${MAX_CLAIMS_PER_CYCLE}`, { MAX_CLAIMS_PER_CYCLE: MAX_CLAIMS_PER_CYCLE });
+  logger.info(`  Decision gap   : ${DECISION_DELAY_MS / 1000}s`, { DECISION_DELAY_MS1000: DECISION_DELAY_MS / 1000 });
+  logger.info(`  Peer reads     : ${PEER_READS_ENABLED ? `${PEER_READS_PER_PERSONA}/persona via ${PEER_READS_BASE_URL}` : "off"}`, { PEER_READS_ENABLEDPEER_READS_PER_PERSONA: PEER_READS_ENABLED ? `${PEER_READS_PER_PERSONA, PEER_READS_BASE_URL: PEER_READS_BASE_URL });
+  logger.info(`  Peer read gap  : ${PEER_READ_DELAY_MS / 1000}s`, { PEER_READ_DELAY_MS1000: PEER_READ_DELAY_MS / 1000 });
+  logger.info(`  Poll every     : ${POLL_INTERVAL_MS / 1000}s`, { POLL_INTERVAL_MS1000: POLL_INTERVAL_MS / 1000 });
+  logger.info("───────────────────────────────────────────────");
 
   for (const p of ALL_ACTIVE) {
     // Public-key env differs per track, so ask the right one rather than assuming.
@@ -282,7 +284,7 @@ async function main(): Promise<void> {
       ? process.env[philosopherPublicEnv(p.slug)]
       : process.env[personaPublicEnv(p)])?.split(/\s+#/)[0].trim();
     if (!addr) {
-      console.log(`  ${p.emoji} ${p.displayName.padEnd(22)} (no public key configured)`);
+      logger.info(`  ${p.emoji} ${p.displayName.padEnd(22)} (no public key configured)`, { emoji: p.emoji, padEnd22: p.displayName.padEnd(22) });
       continue;
     }
     // Both balances, because the two now answer different questions: XLM says
@@ -294,7 +296,7 @@ async function main(): Promise<void> {
       `  ${p.emoji} ${p.displayName.padEnd(22)} ${addr.slice(0, 5)}…${addr.slice(-4)} · ${fees} · ${bankroll}`,
     );
   }
-  console.log("═══════════════════════════════════════════════\n");
+  logger.info("═══════════════════════════════════════════════\n");
 
   const safePoll = () => reportingPoll("council", "council", POLL_INTERVAL_MS / 1000, poll);
 
@@ -303,6 +305,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("[council] fatal:", err);
+  logger.error("[council] fatal:", { error: err });
   process.exit(1);
 });

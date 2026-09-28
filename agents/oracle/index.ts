@@ -51,6 +51,8 @@
 // the Authorization header and trigger API_KEY_INVALID.
 applyWorkerGeminiKey("ORACLE_GEMINI_API_KEY");
 
+import { createWorkerLogger } from "../../lib/ops/logger";
+const logger = createWorkerLogger("oracle");
 import { requireEnv, requireAnyLLMKey, applyWorkerGeminiKey, createThrottle } from "../../lib/agent-bootstrap";
 import { kellyFraction } from "../../lib/kelly";
 import { isVerdict, type Verdict } from "../../lib/verdict";
@@ -464,10 +466,10 @@ Reply JSON only: { "final": true | false }
 // ── ROLE 1: Settle expired claim ──────────────────────────────────────────────
 // Returns true if resolved on-chain, false if deferred (e.g. match not final yet).
 async function settle(claim: ClaimOnChain): Promise<boolean> {
-  console.log(`\n[settle] Claim #${claim.id}: "${claim.question.slice(0, 60)}..."`);
+  logger.info(`\n[settle] Claim #${claim.id}: "${claim.question.slice(0, 60)}..."`, { id: claim.id, slice060: claim.question.slice(0, 60) });
 
   const evidence     = await fetchEvidence(claim);
-  console.log(`[settle] Evidence fetcher: ${evidence.fetcher}`);
+  logger.info(`[settle] Evidence fetcher: ${evidence.fetcher}`, { fetcher: evidence.fetcher });
 
   // Sports: betting closed at kickoff, so don't resolve until the match is final
   // (unless we're past the grace window, to avoid locking funds on a data outage).
@@ -475,13 +477,13 @@ async function settle(claim: ClaimOnChain): Promise<boolean> {
     const now = Math.floor(Date.now() / 1000);
     const pastGrace = now > claim.deadline + SPORTS_SETTLE_GRACE_SECS;
     if (!pastGrace && !(await isSportsEventFinal(claim, evidence.text))) {
-      console.log(`[settle] Claim #${claim.id}: match not final yet — deferring to a later poll.`);
+      logger.info(`[settle] Claim #${claim.id}: match not final yet — deferring to a later poll.`, { id: claim.id });
       return false;
     }
   }
   if (evidence.payment) {
     const paid = unitsToUsdc(BigInt(evidence.payment.priceUnits));
-    console.log(`[settle] 💸 Paid ${paid.toFixed(6)} USDC for evidence (tx ${evidence.payment.txHash})`);
+    logger.info(`[settle] 💸 Paid ${paid.toFixed(6)} USDC for evidence (tx ${evidence.payment.txHash})`, { toFixed6: paid.toFixed(6), txHash: evidence.payment.txHash });
   }
 
   // Council-as-jury: buy each persona's verdict (USDC → persona wallet) and
@@ -505,28 +507,28 @@ async function settle(claim: ClaimOnChain): Promise<boolean> {
         ? { selfResolving: { alpha: COUNCIL_ALPHA, minVotes: COUNCIL_QUORUM } }
         : {}),
     }).catch((err) => {
-      console.warn(`[settle] council vote failed, falling back to solo:`, err instanceof Error ? err.message : err);
+      logger.warn(`[settle] council vote failed, falling back to solo:`, err instanceof Error ? err.message : err);
       return null;
     });
     if (council && COUNCIL_SELF_RESOLVING) {
       const paidUsdc = unitsToUsdc(council.totalPaidUnits);
-      console.log(`[settle] 🏛️  Self-resolving jury: q=[${(council.qHistory ?? []).map((q) => q.toFixed(2)).join(", ")}] · paid ${paidUsdc.toFixed(6)} USDC in vote fees`);
+      console.log(`[settle] 🏛️  Self-resolving jury: q=[${(council.qHistory ?? []).map((q) => q.toFixed(2)).join(", ")}] · paid ${paidUsdc.toFixed(6)} USDC in vote fees`, { qHistory: (council.qHistory ?? []).map((q) => q.toFixed(2)).join(", "), toFixed6: paidUsdc.toFixed(6) });
       // Terminal (reference) report: full juror history + independent evidence.
       const reference  = await evaluateClaim(claim, evidence.text, council.reports ?? []);
       const referenceQ = verdictToProbability(reference.verdict, reference.confidence, Q_PRIOR);
       council.votes = scoreCouncilVotes(council.votes, referenceQ);
       const scores = council.votes.map((v) => Number((v.score ?? 0).toFixed(4)));
-      console.log(`[settle] 🏛️  Reference q_T=${referenceQ.toFixed(2)} · CE scores: ${council.votes.map((v) => `${v.slug}=${(v.score ?? 0).toFixed(3)}`).join(" ")}`);
+      logger.info(`[settle] 🏛️  Reference q_T=${referenceQ.toFixed(2)} · CE scores: ${council.votes.map((v) => `${v.slug}=${(v.score ?? 0).toFixed(3)}`, { toFixed2: referenceQ.toFixed(2), slug: council.votes.map((v) => `${v.slug, score: (v.score ?? 0).toFixed(3) });.join(" ")}`);
       rawVerdict = reference;
       commit = `${evidence.text}\n[council]${JSON.stringify({ tally: council.tally, q: council.qHistory, refQ: Number(referenceQ.toFixed(4)), scores })}`;
       bonusVotes = council.votes;
     } else if (council) {
       const paidUsdc = unitsToUsdc(council.totalPaidUnits);
-      console.log(`[settle] 🏛️  Council ${council.tally.creator}–${council.tally.challengers} (${council.tally.draw + council.tally.unresolvable} abstain) · paid ${paidUsdc.toFixed(6)} USDC to jurors`);
+      logger.info(`[settle] 🏛️  Council ${council.tally.creator}–${council.tally.challengers} (${council.tally.draw + council.tally.unresolvable} abstain) · paid ${paidUsdc.toFixed(6)} USDC to jurors`, { creator: council.tally.creator, challengers: council.tally.challengers, unresolvable: council.tally.draw + council.tally.unresolvable, toFixed6: paidUsdc.toFixed(6) });
       rawVerdict = { verdict: council.verdict, confidence: council.confidence, explanation: council.explanation };
       commit = `${evidence.text}\n[council]${JSON.stringify(council.tally)}`;
     } else {
-      console.log(`[settle] Council below quorum — settling solo.`);
+      logger.info(`[settle] Council below quorum — settling solo.`);
       rawVerdict = await evaluateClaim(claim, evidence.text);
     }
   } else {
@@ -542,9 +544,9 @@ async function settle(claim: ClaimOnChain): Promise<boolean> {
     verdict.explanation !== rawVerdict.explanation ? "CONTESTED" :
     "FIRM";
 
-  console.log(`[settle] Verdict: ${verdict.verdict} (${verdict.confidence}%) [${tierTag}]`);
-  console.log(`[settle] Evidence hash: ${evidenceHash}`);
-  console.log(`[settle] "${verdict.explanation.slice(0, 100)}..."`);
+  logger.info(`[settle] Verdict: ${verdict.verdict} (${verdict.confidence}%) [${tierTag}]`, { verdict: verdict.verdict, confidence: verdict.confidence, tierTag: tierTag });
+  logger.info(`[settle] Evidence hash: ${evidenceHash}`, { evidenceHash: evidenceHash });
+  logger.info(`[settle] "${verdict.explanation.slice(0, 100)}..."`, { slice0100: verdict.explanation.slice(0, 100) });
 
   // Resolution ESCROWS the challenger side rather than paying it: a Stellar
   // transaction cannot carry ~100 payouts inside its ledger-entry footprint, so
@@ -557,7 +559,7 @@ async function settle(claim: ClaimOnChain): Promise<boolean> {
     evidence_hash: evidenceHash,
   });
 
-  console.log(`[settle] ✓ Resolved — ${settled.explorerUrl ?? settled.txHash}`);
+  logger.info(`[settle] ✓ Resolved — ${settled.explorerUrl ?? settled.txHash}`, { explorerUrl: settled.explorerUrl ?? settled.txHash });
 
   // Cross-entropy bonuses AFTER the on-chain settle: informative jurors split
   // the pool, parrots and dissenters-from-evidence get nothing. Best-effort —
@@ -565,10 +567,10 @@ async function settle(claim: ClaimOnChain): Promise<boolean> {
   if (bonusVotes && COUNCIL_BONUS_USDC > 0) {
     const receipts = await payCouncilBonuses(bonusVotes, COUNCIL_BONUS_USDC, ORACLE);
     for (const r of receipts) {
-      console.log(`[settle] 🏆 Bonus ${r.bonusUsdc.toFixed(7)} USDC → ${r.slug}${r.txHash ? ` — ${getExplorerTxUrl(r.txHash)}` : " (transfer failed)"}`);
+      logger.info(`[settle] 🏆 Bonus ${r.bonusUsdc.toFixed(7)} USDC → ${r.slug}${r.txHash ? ` — ${getExplorerTxUrl(r.txHash)}` : " (transfer failed)"}`, { toFixed7: r.bonusUsdc.toFixed(7), slug: r.slug, txHash: r.txHash ? ` — ${getExplorerTxUrl(r.txHash) });
     }
     if (receipts.length === 0) {
-      console.log(`[settle] No positive-score jurors this round — bonus pool untouched.`);
+      logger.info(`[settle] No positive-score jurors this round — bonus pool untouched.`);
     }
   }
   return true;
@@ -604,7 +606,7 @@ async function challengeIfMispriced(claim: ClaimOnChain): Promise<void> {
   // strand itself for fees by staking, which is why only USDC is checked here.
   const balances = await readAgentBalances(ORACLE_ADDR);
   if (balances.usdc === null) {
-    console.log(`[challenge] Oracle holds no USDC trustline — run npm run agents:fund`);
+    logger.info(`[challenge] Oracle holds no USDC trustline — run npm run agents:fund`);
     return;
   }
   if (balances.usdc < CHALLENGE_STAKE_USDC) {
@@ -615,7 +617,7 @@ async function challengeIfMispriced(claim: ClaimOnChain): Promise<void> {
   }
 
   // Evaluate early
-  console.log(`\n[challenge] Evaluating claim #${claim.id}: "${claim.question.slice(0, 60)}..."`);
+  logger.info(`\n[challenge] Evaluating claim #${claim.id}: "${claim.question.slice(0, 60)}..."`, { id: claim.id, slice060: claim.question.slice(0, 60) });
   evaluatedClaimIds.add(claim.id);
 
   const evidence = await fetchEvidence(claim);
@@ -624,18 +626,18 @@ async function challengeIfMispriced(claim: ClaimOnChain): Promise<void> {
   // which never satisfies the CHALLENGERS_WIN/≥80% bar below. Skip the
   // wasted LLM call — saves a Gemini RPM slot per dead-evidence claim.
   if (evidence.fetcher === "none") {
-    console.log(`[challenge] Skipping LLM — no evidence available (fetcher=none)`);
+    logger.info(`[challenge] Skipping LLM — no evidence available (fetcher=none)`);
     return;
   }
 
   const rawVerdict = await evaluateClaim(claim, evidence.text);
   const verdict = applyFetcherTrust(rawVerdict, evidence.fetcher);
 
-  console.log(`[challenge] Early verdict: ${verdict.verdict} (${verdict.confidence}%) [fetcher=${evidence.fetcher}]`);
+  logger.info(`[challenge] Early verdict: ${verdict.verdict} (${verdict.confidence}%) [fetcher=${evidence.fetcher}]`, { verdict: verdict.verdict, confidence: verdict.confidence, fetcher: evidence.fetcher });
 
   // Only challenge if highly confident challengers will win
   if (verdict.verdict !== "CHALLENGERS_WIN" || verdict.confidence < CHALLENGE_CONFIDENCE) {
-    console.log(`[challenge] Not confident enough to stake — skipping`);
+    logger.info(`[challenge] Not confident enough to stake — skipping`);
     return;
   }
 
@@ -647,16 +649,16 @@ async function challengeIfMispriced(claim: ClaimOnChain): Promise<void> {
   const kellyStake = Math.max(CHALLENGE_STAKE_USDC, Math.min(bankroll * kelly, bankroll * 0.1));
   const stakeUsdc = Math.round(kellyStake * 100) / 100;
 
-  console.log(`[challenge] Kelly: ${(kelly * 100).toFixed(1)}% of USDC bankroll → ${stakeUsdc} USDC stake`);
-  console.log(`[challenge] Staking ${stakeUsdc} USDC on challenger side...`);
+  logger.info(`[challenge] Kelly: ${(kelly * 100).toFixed(1)}% of USDC bankroll → ${stakeUsdc} USDC stake`, { toFixed1: (kelly * 100).toFixed(1), stakeUsdc: stakeUsdc });
+  logger.info(`[challenge] Staking ${stakeUsdc} USDC on challenger side...`, { stakeUsdc: stakeUsdc });
 
   // One call, one signature. No `approve` leg: the invocation carries auth for
   // exactly this transfer of exactly this amount.
   const staked = await challengeClaim(ORACLE.signer, claim.id, stakeUsdc);
 
   challengedClaimIds.add(claim.id);
-  console.log(`[challenge] ✓ Staked ${stakeUsdc} USDC — ${staked.explorerUrl ?? staked.txHash}`);
-  console.log(`[challenge] Oracle: "${verdict.explanation.slice(0, 120)}"`);
+  logger.info(`[challenge] ✓ Staked ${stakeUsdc} USDC — ${staked.explorerUrl ?? staked.txHash}`, { stakeUsdc: stakeUsdc, explorerUrl: staked.explorerUrl ?? staked.txHash });
+  logger.info(`[challenge] Oracle: "${verdict.explanation.slice(0, 120)}"`, { slice0120: verdict.explanation.slice(0, 120) });
 }
 
 // ── Main poll loop ────────────────────────────────────────────────────────────
@@ -667,11 +669,11 @@ async function poll(): Promise<void> {
   try {
     total = await getClaimCount();
   } catch (err) {
-    console.warn("[oracle] Failed to read the claim count:", err);
+    logger.warn("[oracle] Failed to read the claim count:", { error: err });
     return;
   }
 
-  console.log(`\n[oracle] ── Poll at ${new Date().toISOString()} ── ${total} claims`);
+  logger.info(`\n[oracle] ── Poll at ${new Date().toISOString()} ── ${total} claims`, { toISOString: new Date().toISOString(), total: total });
 
   const settled: number[]   = [];
   const challenged: number[] = [];
@@ -698,7 +700,7 @@ async function poll(): Promise<void> {
         if (challengedClaimIds.size > before) challenged.push(id);
       }
     } catch (err) {
-      console.error(`[oracle] Error on claim ${id}:`, err);
+      logger.error(`[oracle] Error on claim ${id}:`, err);
     }
   }
 
@@ -710,11 +712,11 @@ async function poll(): Promise<void> {
       if (!resolved) continue; // deferred (e.g. sports match not final) — retry next poll
       settled.push(claim.id);
       if (i < expiredActive.length - 1 && SETTLEMENT_DELAY_MS > 0) {
-        console.log(`[oracle] Cooling down ${(SETTLEMENT_DELAY_MS / 60000).toFixed(1)} min before next settlement...`);
+        console.log(`[oracle] Cooling down ${(SETTLEMENT_DELAY_MS / 60000).toFixed(1)} min before next settlement...`, { id: id, toFixed1: (SETTLEMENT_DELAY_MS / 60000).toFixed(1) });
         await new Promise((resolve) => setTimeout(resolve, SETTLEMENT_DELAY_MS));
       }
     } catch (err) {
-      console.error(`[oracle] Error settling claim ${claim.id}:`, err);
+      logger.error(`[oracle] Error settling claim ${claim.id}:`, err);
     }
   }
 
@@ -735,19 +737,19 @@ async function main(): Promise<void> {
     );
   }
 
-  console.log("═══════════════════════════════════════════════");
-  console.log("  Mimir Oracle Agent (local Stellar keypair signer)");
-  console.log(`  Contract   : ${CONTRACT_ID}`);
-  console.log(`  Oracle     : ${ORACLE_ADDR}`);
-  console.log(`  Fees       : ${(balances.xlm ?? 0).toFixed(4)} XLM`);
-  console.log(`  Bankroll   : ${balances.usdc === null ? "no USDC trustline" : `${balances.usdc.toFixed(4)} USDC`}`);
-  console.log(`  Network    : Stellar ${STELLAR_NETWORK}`);
-  console.log(`  LLM        : ${activeLLMProvider()} / ${activeLLMModel()} · key=${activeLLMKeyFingerprint()}`);
-  console.log(`  Throttle   : ${LLM_THROTTLE_MS > 0 ? `${LLM_THROTTLE_MS}ms (${(60_000 / LLM_THROTTLE_MS).toFixed(1)} RPM cap)` : "OFF"}`);
-  console.log(`  Settle gap : ${SETTLEMENT_DELAY_MS / 1000}s`);
-  console.log(`  Poll every : ${POLL_INTERVAL_MS / 1000}s`);
-  console.log(`  Auto-challenge: ${AUTO_CHALLENGE ? `YES (≥${CHALLENGE_CONFIDENCE}% confidence, ${CHALLENGE_STAKE_USDC} USDC/claim)` : "OFF (set AUTO_CHALLENGE=1 to enable)"}`);
-  console.log("═══════════════════════════════════════════════\n");
+  logger.info("═══════════════════════════════════════════════");
+  logger.info("  Mimir Oracle Agent (local Stellar keypair signer)");
+  console.log(`  Contract   : ${CONTRACT_ID}`, { id: claim.id, join: settled.join(", "), join: challenged.join(", "), summary: summary, ORACLE_ADDR: ORACLE_ADDR, CONTRACT_ID: CONTRACT_ID });
+  logger.info(`  Oracle     : ${ORACLE_ADDR}`, { ORACLE_ADDR: ORACLE_ADDR });
+  logger.info(`  Fees       : ${(balances.xlm ?? 0).toFixed(4)} XLM`, { xlm: (balances.xlm ?? 0).toFixed(4) });
+  logger.info(`  Bankroll   : ${balances.usdc === null ? "no USDC trustline" : `${balances.usdc.toFixed(4)} USDC`}`, { toFixed4: balances.usdc === null ? "no USDC trustline" : `${balances.usdc.toFixed(4) });
+  logger.info(`  Network    : Stellar ${STELLAR_NETWORK}`, { STELLAR_NETWORK: STELLAR_NETWORK });
+  logger.info(`  LLM        : ${activeLLMProvider()} / ${activeLLMModel()} · key=${activeLLMKeyFingerprint()}`, { activeLLMProvider: activeLLMProvider(), activeLLMModel: activeLLMModel(), activeLLMKeyFingerprint: activeLLMKeyFingerprint() });
+  logger.info(`  Throttle   : ${LLM_THROTTLE_MS > 0 ? `${LLM_THROTTLE_MS}ms (${(60_000 / LLM_THROTTLE_MS).toFixed(1)} RPM cap)` : "OFF"}`, { LLM_THROTTLE_MS0LLM_THROTTLE_MS: LLM_THROTTLE_MS > 0 ? `${LLM_THROTTLE_MS, toFixed1: (60_000 / LLM_THROTTLE_MS).toFixed(1) });
+  logger.info(`  Settle gap : ${SETTLEMENT_DELAY_MS / 1000}s`, { SETTLEMENT_DELAY_MS1000: SETTLEMENT_DELAY_MS / 1000 });
+  logger.info(`  Poll every : ${POLL_INTERVAL_MS / 1000}s`, { POLL_INTERVAL_MS1000: POLL_INTERVAL_MS / 1000 });
+  logger.info(`  Auto-challenge: ${AUTO_CHALLENGE ? `YES (≥${CHALLENGE_CONFIDENCE}% confidence, ${CHALLENGE_STAKE_USDC} USDC/claim)` : "OFF (set AUTO_CHALLENGE=1 to enable)"}`, { AUTO_CHALLENGEYESCHALLENGE_CONFIDENCE: AUTO_CHALLENGE ? `YES (≥${CHALLENGE_CONFIDENCE, CHALLENGE_STAKE_USDC: CHALLENGE_STAKE_USDC });
+  logger.info("═══════════════════════════════════════════════\n");
 
   // Reports a heartbeat either way, so a crash-looping oracle shows as alive and
   // failing on /api/health rather than merely stale.
@@ -758,6 +760,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("[oracle] Fatal:", err);
+  logger.error("[oracle] Fatal:", { error: err });
   process.exit(1);
 });

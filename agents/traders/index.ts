@@ -30,6 +30,8 @@ process.env.LLM_PROVIDER = "groq";
 
 import { randomUUID } from "node:crypto";
 
+import { createWorkerLogger } from "../../lib/ops/logger";
+const logger = createWorkerLogger("traders");
 import { challengeClaim } from "../../lib/contract";
 import { loadAgentWallet, readAgentBalances, type AgentWallet } from "../../lib/agent-wallets";
 import { STELLAR_NETWORK, requireMarketContractId } from "../../lib/stellar";
@@ -99,7 +101,7 @@ async function ensureRegistered(persona: TraderPersona, wallet: AgentWallet): Pr
     updatedAt: now,
   };
   await saveAgent(record);
-  console.log(`[traders] ${persona.emoji} registered ${persona.agentId} (${wallet.address})`);
+  logger.info(`[traders] ${persona.emoji} registered ${persona.agentId} (${wallet.address})`, { emoji: persona.emoji, agentId: persona.agentId, address: wallet.address });
   return record;
 }
 
@@ -170,11 +172,11 @@ async function buyOracleOpinion(
     if (!response.ok) return null;
     const verdict = await response.json() as { verdict?: string; confidence?: number; explanation?: string };
     if (payment?.txHash) {
-      console.log(`[traders]   paid ${PRICES.oracle} for an oracle read — ${payment.txHash.slice(0, 12)}…`);
+      logger.info(`[traders]   paid ${PRICES.oracle} for an oracle read — ${payment.txHash.slice(0, 12)}…`, { oracle: PRICES.oracle, slice012: payment.txHash.slice(0, 12) });
     }
     return `Oracle (paid ${PRICES.oracle}): ${verdict.verdict ?? "?"} at ${verdict.confidence ?? "?"}% — ${String(verdict.explanation ?? "").slice(0, 200)}`;
   } catch (err) {
-    console.warn("[traders]   oracle purchase failed:", err instanceof Error ? err.message : err);
+    logger.warn("[traders]   oracle purchase failed:", { error: err instanceof Error ? err.message : err });
     return null;
   }
 }
@@ -232,7 +234,7 @@ async function joinableFor(wallet: AgentWallet) {
 async function runTrader(persona: TraderPersona): Promise<void> {
   const wallet = walletFor(persona);
   if (!wallet) {
-    console.log(`[traders] ${persona.emoji} ${persona.agentId}: ${persona.keyEnv} not set, skipping`);
+    logger.info(`[traders] ${persona.emoji} ${persona.agentId}: ${persona.keyEnv} not set, skipping`, { emoji: persona.emoji, agentId: persona.agentId, keyEnv: persona.keyEnv });
     return;
   }
   await ensureRegistered(persona, wallet);
@@ -250,17 +252,17 @@ async function runTrader(persona: TraderPersona): Promise<void> {
   // costs ~0.00001 XLM against a Friendbot grant of 10,000, so there is no fee
   // budget to run down mid-cycle.
   if (!balances.exists) {
-    return void console.log(`[traders]   account does not exist — run npm run agents:fund`);
+    return void logger.info(`[traders]   account does not exist — run npm run agents:fund`);
   }
   if (balances.usdc === null) {
-    return void console.log(`[traders]   no USDC trustline — run npm run agents:fund`);
+    return void logger.info(`[traders]   no USDC trustline — run npm run agents:fund`);
   }
   if (balances.usdc < persona.stakeUsdc) {
-    return void console.log(`[traders]   below ${persona.stakeUsdc} USDC, standing aside`);
+    return void logger.info(`[traders]   below ${persona.stakeUsdc} USDC, standing aside`, { stakeUsdc: persona.stakeUsdc });
   }
 
   const joinable = await joinableFor(wallet);
-  if (joinable.length === 0) return void console.log(`[traders]   nothing joinable this cycle`);
+  if (joinable.length === 0) return void logger.info(`[traders]   nothing joinable this cycle`);
 
   let staked = 0;
   for (const claim of joinable) {
@@ -268,10 +270,10 @@ async function runTrader(persona: TraderPersona): Promise<void> {
     const secondOpinion = await buyOracleOpinion(wallet, claim);
     const decision = await decide(persona, claim, secondOpinion);
     const take = shouldStake(decision.verdict, decision.confidence, persona);
-    console.log(`[traders]   #${claim.id} ${decision.verdict} ${decision.confidence}% ${take ? "→ STAKE" : "→ pass"} · ${decision.reasoning.slice(0, 90)}`);
+    logger.info(`[traders]   #${claim.id} ${decision.verdict} ${decision.confidence}% ${take ? "→ STAKE" : "→ pass"} · ${decision.reasoning.slice(0, 90)}`, { id: claim.id, verdict: decision.verdict, confidence: decision.confidence, takeSTAKEpass: take ? "→ STAKE" : "→ pass", slice090: decision.reasoning.slice(0, 90) });
     if (!take) continue;
     if (DRY_RUN) {
-      console.log(`[traders]   DRY_RUN — would stake ${persona.stakeUsdc} USDC on #${claim.id}`);
+      logger.info(`[traders]   DRY_RUN — would stake ${persona.stakeUsdc} USDC on #${claim.id}`, { stakeUsdc: persona.stakeUsdc, id: claim.id });
       staked += 1;
       continue;
     }
@@ -285,32 +287,32 @@ async function runTrader(persona: TraderPersona): Promise<void> {
       staked += 1;
     } catch (err) {
       // A contract error is one claim's problem, not the cycle's: keep going.
-      console.warn(`[traders]   ✗ #${claim.id} stake failed:`, err instanceof Error ? err.message : err);
+      logger.warn(`[traders]   ✗ #${claim.id} stake failed:`, err instanceof Error ? err.message : err);
     }
   }
 }
 
 async function poll(): Promise<void> {
-  console.log(`\n[traders] ── Cycle at ${new Date().toISOString()} · ${TRADER_PERSONAS.length} traders`);
+  console.log(`\n[traders] ── Cycle at ${new Date().toISOString()} · ${TRADER_PERSONAS.length} traders`, { id: claim.id, toISOString: new Date().toISOString(), length: TRADER_PERSONAS.length });
   for (const persona of TRADER_PERSONAS) {
     try {
       await runTrader(persona);
     } catch (err) {
-      console.error(`[traders] ${persona.agentId} failed:`, err instanceof Error ? err.message : err);
+      logger.error(`[traders] ${persona.agentId} failed:`, err instanceof Error ? err.message : err);
     }
   }
 }
 
 async function main(): Promise<void> {
-  console.log("═══════════════════════════════════════════════");
-  console.log("  Mimir demo BYOA traders");
-  console.log(`  Contract   : ${requireMarketContractId()}`);
-  console.log(`  Network    : Stellar ${STELLAR_NETWORK}`);
-  console.log(`  LLM        : ${activeLLMProvider()} / ${activeLLMModel()}`);
-  console.log(`  Traders    : ${TRADER_PERSONAS.map((p) => p.agentId).join(", ")}`);
-  console.log(`  Stake      : ${TRADER_PERSONAS[0].stakeUsdc} USDC · max ${MAX_STAKES_PER_CYCLE}/cycle each`);
-  console.log(`  Poll every : ${POLL_INTERVAL_MS / 1000}s${DRY_RUN ? " · DRY RUN" : ""}`);
-  console.log("═══════════════════════════════════════════════\n");
+  logger.info("═══════════════════════════════════════════════");
+  logger.info("  Mimir demo BYOA traders");
+  console.log(`  Contract   : ${requireMarketContractId()}`, { agentId: persona.agentId, requireMarketContractId: requireMarketContractId() });
+  logger.info(`  Network    : Stellar ${STELLAR_NETWORK}`, { STELLAR_NETWORK: STELLAR_NETWORK });
+  logger.info(`  LLM        : ${activeLLMProvider()} / ${activeLLMModel()}`, { activeLLMProvider: activeLLMProvider(), activeLLMModel: activeLLMModel() });
+  logger.info(`  Traders    : ${TRADER_PERSONAS.map((p) => p.agentId).join(", ")}`, { join: TRADER_PERSONAS.map((p) => p.agentId).join(", ") });
+  logger.info(`  Stake      : ${TRADER_PERSONAS[0].stakeUsdc} USDC · max ${MAX_STAKES_PER_CYCLE}/cycle each`, { stakeUsdc: TRADER_PERSONAS[0].stakeUsdc, MAX_STAKES_PER_CYCLE: MAX_STAKES_PER_CYCLE });
+  logger.info(`  Poll every : ${POLL_INTERVAL_MS / 1000}s${DRY_RUN ? " · DRY RUN" : ""}`, { POLL_INTERVAL_MS1000: POLL_INTERVAL_MS / 1000, DRY_RUNDRYRUN: DRY_RUN ? " · DRY RUN" : "" });
+  logger.info("═══════════════════════════════════════════════\n");
 
   void randomUUID; // reserved for per-cycle correlation ids
   const safePoll = () => reportingPoll("traders", "traders", POLL_INTERVAL_MS / 1000, poll);
@@ -319,6 +321,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("[traders] Fatal:", err);
+  logger.error("[traders] Fatal:", { error: err });
   process.exit(1);
 });

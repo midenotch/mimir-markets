@@ -120,3 +120,10 @@ https://faucet.circle.com
 Explorer: https://stellar.expert/explorer/testnet
 Public endpoints (rate-limited): https://soroban-testnet.stellar.org and
 https://horizon-testnet.stellar.org
+
+## Observability & Logging
+
+- **Structured JSON Logs**: Agents do not output unstructured strings. They use `StructuredLogger` from `lib/ops/logger.ts`.
+- **Privacy Scrubbing**: `logger.ts` recursively ensures keys resembling secrets (`secret`, `credential`, `key`, `token`, `password`, `authorization`, `private_key`) and their values are filtered out.
+- **Context over interpolation**: Do not embed variables into strings when logging. Pass variables in the second context argument (`logger.info("Evaluating claim", { claimId: 100 })`) for automated ingestion and searchability without breaking error traces.
+- **Error Serialization**: Raw Error instances are automatically traversed and scrubbed. Passes `error` directly within the context object.

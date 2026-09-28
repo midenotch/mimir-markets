@@ -19,6 +19,8 @@
  *      SYNC_POLL_INTERVAL_MS=300000 (poll cadence in ms, default 5m)
  */
 
+import { createWorkerLogger } from "../../lib/ops/logger";
+const logger = createWorkerLogger("sync");
 import { getMarketContractId, getStellarRpcUrl } from "../../lib/stellar";
 import { reportingPoll } from "../../lib/ops/heartbeat";
 import { reconcileSettlements } from "../../lib/server/settlement-index";
@@ -50,12 +52,12 @@ async function main(): Promise<void> {
     throw new Error("DATABASE_URL is required — the read index has nowhere to live");
   }
 
-  console.log("═══════════════════════════════════════════════");
-  console.log("  Mimir Read-Index Sync Worker");
-  console.log(`  Contract   : ${getMarketContractId() || "(unset)"}`);
-  console.log(`  Soroban RPC: ${getStellarRpcUrl()}`);
-  console.log(`  Poll every : ${POLL_INTERVAL_MS / 1000}s`);
-  console.log("═══════════════════════════════════════════════\n");
+  logger.info("═══════════════════════════════════════════════");
+  logger.info("  Mimir Read-Index Sync Worker");
+  logger.info(`  Contract   : ${getMarketContractId() || "(unset)"}`, { getMarketContractIdunset: getMarketContractId() || "(unset)" });
+  logger.info(`  Soroban RPC: ${getStellarRpcUrl()}`, { getStellarRpcUrl: getStellarRpcUrl() });
+  logger.info(`  Poll every : ${POLL_INTERVAL_MS / 1000}s`, { POLL_INTERVAL_MS1000: POLL_INTERVAL_MS / 1000 });
+  logger.info("═══════════════════════════════════════════════\n");
 
   // Reports a heartbeat either way, so a crash-looping sync shows as alive and
   // failing on /api/health rather than merely stale.
@@ -66,6 +68,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("[sync] Fatal:", err);
+  logger.error("[sync] Fatal:", { error: err });
   process.exit(1);
 });
