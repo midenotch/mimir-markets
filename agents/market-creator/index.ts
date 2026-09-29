@@ -26,6 +26,9 @@
  *      MAX_CLAIMS_PER_RUN=5      (max new claims per run, default 5)
  *      MAX_ACTIVE_CLAIMS=30      (skip run if joinable on-chain claims >= this)
  *      RUN_INTERVAL_HOURS=6      (hours between runs, default 6h)
+ *      MARKET_CREATOR_MAX_PER_CATEGORY_MARKETS=5      (open markets per category)
+ *      MARKET_CREATOR_MAX_PER_CATEGORY_EXPOSURE_USDC=100 (open USDC per category)
+ *      MARKET_CREATOR_CATEGORY_CAPS={"crypto":{"maxMarkets":3,"maxExposureUsdc":40}}
  */
 
 // Worker-scoped Gemini key. Falls back to the shared GEMINI_API_KEY when
@@ -55,6 +58,7 @@ import {
 } from "../../lib/stellar";
 import { payingWalletFor } from "../../lib/x402/buyer";
 import { reportingPoll } from "../../lib/ops/heartbeat";
+import { isCategoryEnabled } from "../../lib/ops/flags";
 import { unitsToUsdc } from "../../lib/usdc";
 import { gatherCouncilPreflight } from "./council-preflight";
 import { insertMarketProposal } from "../../lib/db";
@@ -66,8 +70,16 @@ import {
   marketsRemainingUnderCap,
   parseExposureCapPolicy,
   sumCreatorOpenExposure,
-  type CreatorExposureClaim,
 } from "../../lib/market-creator/exposure-caps";
+import {
+  bumpCategoryUsage,
+  checkCategoryCreatorCap,
+  describeCategoryCapPolicy,
+  normalizeCategory,
+  parseCategoryCapPolicy,
+  summariseCreatorCaps,
+  type CategoryExposureClaim,
+} from "../../lib/market-creator/category-caps";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const CONTRACT_ID = requireMarketContractId();
@@ -84,9 +96,21 @@ if (!_exposurePolicy.ok) {
   throw new Error(`[market-creator] ${_exposurePolicy.error}`);
 }
 const MAX_OPEN_EXPOSURE_USDC = _exposurePolicy.policy.maxOpenExposureUsdc;
+// Per-category creator caps (open markets + notional exposure inside each
+// category). Parsed explicitly for the same reason as the exposure ceiling: a
+// malformed cap must stop the worker at boot rather than silently becoming
+// "unlimited" at runtime.
+const _categoryCapPolicy = parseCategoryCapPolicy(process.env, {
+  defaultMaxExposureUsdc: MAX_OPEN_EXPOSURE_USDC,
+});
+if (!_categoryCapPolicy.ok) {
+  throw new Error(`[market-creator] ${_categoryCapPolicy.error}`);
+}
+const CATEGORY_CAP_POLICY = _categoryCapPolicy.policy;
 const CREATOR_POLICY = {
   ...defaultCreatorPolicy(process.env),
   maxOpenExposureUsdc: MAX_OPEN_EXPOSURE_USDC,
+  categoryCaps: CATEGORY_CAP_POLICY,
 };
 const MIN_QUALITY_SCORE = 70; // 0-100
 // Proposal-only until shadow precision has been measured against human review.
@@ -833,8 +857,12 @@ async function createClaim(candidate: ClaimCandidate): Promise<string | null> {
 // returns `claimCount - totalResolved`, which lumps CANCELLED and abandoned
 // expired-OPEN claims (created by other addresses, no challenger, no
 // cancellation rights) into "unresolved" and falsely saturates the cap.
+//
+// `capSourceAvailable` is false when the walk could not produce a usable
+// snapshot. The caller must read that as "skip this run", never as "no open
+// markets" — the latter silently disables every cap computed from the snapshot.
 
-async function sweepAndCount(): Promise<{ cancelled: number; joinable: number; joinableClaims: ExistingClaimSignature[]; creatorExposureClaims: CreatorExposureClaim[] }> {
+async function sweepAndCount(): Promise<{ cancelled: number; joinable: number; joinableClaims: ExistingClaimSignature[]; creatorExposureClaims: CategoryExposureClaim[]; capSourceAvailable: boolean }> {
   let total: number;
   try {
     total = await getClaimCount();
@@ -847,7 +875,7 @@ async function sweepAndCount(): Promise<{ cancelled: number; joinable: number; j
   let cancelled = 0;
   let joinable = 0;
   const joinableClaims: ExistingClaimSignature[] = [];
-  const creatorExposureClaims: CreatorExposureClaim[] = [];
+  const creatorExposureClaims: CategoryExposureClaim[] = [];
 
   for (let id = 1; id <= total; id++) {
     // One read for the whole claim, and it comes back with NAMED fields — so the
@@ -869,6 +897,8 @@ async function sweepAndCount(): Promise<{ cancelled: number; joinable: number; j
     // Snapshot every claim for exposure accounting. Filtering (creator, live
     // state, deadline, malformed stakes) happens in sumCreatorOpenExposure so
     // the worker and the unit tests share one definition of "open exposure".
+    // The category rides along so the same snapshot can be bucketed per
+    // category without a second claim walk.
     creatorExposureClaims.push({
       id,
       creator: claim.creator,
@@ -876,6 +906,7 @@ async function sweepAndCount(): Promise<{ cancelled: number; joinable: number; j
       deadline: claim.deadline,
       creatorStakeUsdc: claim.creator_stake,
       reservedCreatorLiabilityUsdc: claim.reserved_creator_liability,
+      category: String(claim.category ?? ""),
     });
 
     // EXACT comparison: a Stellar `G…` strkey is case-sensitive base32, so
@@ -897,7 +928,7 @@ async function sweepAndCount(): Promise<{ cancelled: number; joinable: number; j
       logger.error(`[market-creator] Failed to cancel #${id}:`, err);
     }
   }
-  return { cancelled, joinable, joinableClaims, creatorExposureClaims };
+  return { cancelled, joinable, joinableClaims, creatorExposureClaims, capSourceAvailable: true };
 }
 
 /**
@@ -982,7 +1013,28 @@ async function run(): Promise<void> {
   // claim walk. Joinable count drives the cap — getPlatformStats was wrong
   // here because it counted CANCELLED and abandoned expired-OPEN claims as
   // "unresolved" and deadlocked the creator at the cap forever.
-  const { cancelled, joinable, joinableClaims, creatorExposureClaims } = await sweepAndCount();
+  const { cancelled, joinable, joinableClaims, creatorExposureClaims, capSourceAvailable } =
+    await sweepAndCount();
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  // Every cap below is computed from this snapshot. If the claim walk did not
+  // produce one, publishing without the check would be worse than not
+  // publishing: it would fail open on the exposure ceiling AND the per-category
+  // caps. So the run is skipped, not degraded.
+  const capSummary = summariseCreatorCaps({
+    available: capSourceAvailable,
+    claims: creatorExposureClaims,
+    creatorAddress: CREATOR_ADDR,
+    nowSeconds,
+  });
+  if (!capSummary.publishable) {
+    console.warn(
+      "[market-creator] Claim snapshot unavailable — per-category caps cannot be " +
+        "resolved. Skipping this run instead of publishing without a cap check (fail closed).",
+    );
+    return;
+  }
+
   if (cancelled > 0) {
     logger.info(`[market-creator] Cancelled ${cancelled} stale claim(s) — stake refunded.`, { cancelled: cancelled });
   }
@@ -1068,6 +1120,32 @@ async function run(): Promise<void> {
       break;
     }
 
+    // Per-category cap + operational kill switch for the candidate's category.
+    // `continue` rather than `break`: a full crypto bucket does not mean a
+    // weather candidate is over its own cap. The bucket read is refreshed
+    // optimistically after each successful create below.
+    const categoryKey = normalizeCategory(candidate.category);
+    const categoryBucket =
+      (categoryKey ? capSummary.byCategory[categoryKey] : undefined) ?? {
+        openMarkets: 0,
+        openExposureUsdc: 0,
+        claimIds: [],
+      };
+    const categoryGate = checkCategoryCreatorCap({
+      category: candidate.category,
+      policy: CREATOR_POLICY.categoryCaps,
+      openMarkets: categoryBucket.openMarkets,
+      openExposureUsdc: categoryBucket.openExposureUsdc,
+      stakeUsdc: CREATOR_STAKE_USDC,
+      // Same source of truth the API write paths use, so one env var stops a
+      // category everywhere instead of only on the browser path.
+      categoryEnabled: isCategoryEnabled(candidate.category),
+    });
+    if (!categoryGate.allowed) {
+      console.log(`[market-creator] Per-category cap blocks this candidate — ${categoryGate.blockedBy}`);
+      continue;
+    }
+
     // Record the decision in the canonical schema BEFORE acting on it (§10.4), so
     // a run that dies mid-create still leaves the proposal it was acting on.
     const proposalId = await recordProposal(candidate, SHADOW_MODE ? "shadow" : "create");
@@ -1090,6 +1168,7 @@ async function run(): Promise<void> {
       // Optimistic local accounting: the next iteration must not wait for another
       // full claim walk to honour the cap inside this run.
       openExposureUsdc = exposureGate.nextExposureUsdc;
+      bumpCategoryUsage(capSummary.byCategory, candidate.category, CREATOR_STAKE_USDC);
     }
     if (i < selected.length - 1 && CREATE_DELAY_MS > 0) {
       logger.info(`[market-creator] Cooling down ${(CREATE_DELAY_MS / 60000).toFixed(1)} min before next market...`, { toFixed1: (CREATE_DELAY_MS / 60000).toFixed(1) });
