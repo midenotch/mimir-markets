@@ -70,13 +70,13 @@ import {
 } from "../../lib/market-creator/exposure-caps";
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const CONTRACT_ID         = requireMarketContractId();
+const CONTRACT_ID = requireMarketContractId();
 const CREATOR_STAKE_USDC = Number(
   process.env.CREATOR_STAKE_USDC ?? "2"
 );
-const MAX_CLAIMS_PER_RUN  = Number(process.env.MAX_CLAIMS_PER_RUN ?? "5");
-const MAX_ACTIVE_CLAIMS   = Number(process.env.MAX_ACTIVE_CLAIMS ?? "30");
-const RUN_INTERVAL_HOURS  = Number(process.env.RUN_INTERVAL_HOURS ?? "6");
+const MAX_CLAIMS_PER_RUN = Number(process.env.MAX_CLAIMS_PER_RUN ?? "5");
+const MAX_ACTIVE_CLAIMS = Number(process.env.MAX_ACTIVE_CLAIMS ?? "30");
+const RUN_INTERVAL_HOURS = Number(process.env.RUN_INTERVAL_HOURS ?? "6");
 // Creator open-exposure ceiling (USDC). Parsed explicitly so a bad env value
 // fails closed instead of disabling the funded-state safety rail.
 const _exposurePolicy = parseExposureCapPolicy(process.env);
@@ -88,10 +88,10 @@ const CREATOR_POLICY = {
   ...defaultCreatorPolicy(process.env),
   maxOpenExposureUsdc: MAX_OPEN_EXPOSURE_USDC,
 };
-const MIN_QUALITY_SCORE   = 70; // 0-100
+const MIN_QUALITY_SCORE = 70; // 0-100
 // Proposal-only until shadow precision has been measured against human review.
 // Opt-in rather than opt-out: the default has to be the safe one.
-const SHADOW_MODE         = process.env.MARKET_CREATOR_AUTONOMOUS !== "1";
+const SHADOW_MODE = process.env.MARKET_CREATOR_AUTONOMOUS !== "1";
 const DEFAULT_MAX_CHALLENGERS = Number(process.env.MARKET_CREATOR_MAX_CHALLENGERS ?? "10");
 /** U+001F, so a proposal id cannot be forged by a question containing the joiner. */
 const UNIT_SEPARATOR = String.fromCharCode(0x1f);
@@ -118,7 +118,7 @@ function resolveFeeRecipient(): string | undefined {
   if (!isAccountAddress(configured) && !isContractAddress(configured)) {
     console.warn(
       `[market-creator] MARKET_CREATOR_FEE_RECIPIENT "${configured}" is not a Stellar address — ` +
-        `markets will be opened with no agent-owner fee recipient.`,
+      `markets will be opened with no agent-owner fee recipient.`,
     );
     return undefined;
   }
@@ -138,51 +138,51 @@ requireEnv(["CREATOR_SECRET"]);
 requireAnyLLMKey();
 
 // ── Clients ───────────────────────────────────────────────────────────────────
-const CREATOR        = getCreatorWallet();
-const CREATOR_ADDR   = CREATOR.address;
-const CREATOR_PAYER  = payingWalletFor(CREATOR);
+const CREATOR = getCreatorWallet();
+const CREATOR_ADDR = CREATOR.address;
+const CREATOR_PAYER = payingWalletFor(CREATOR);
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface ClaimCandidate {
-  question:         string;
-  creatorPosition:  string;
-  counterPosition:  string;
-  resolutionUrl:    string;
-  category:         string;
-  marketType:       string;
-  settlementRule:   string;
-  deadlineHours:    number;
-  qualityScore:     number;
-  sourceType:       string;
+  question: string;
+  creatorPosition: string;
+  counterPosition: string;
+  resolutionUrl: string;
+  category: string;
+  marketType: string;
+  settlementRule: string;
+  deadlineHours: number;
+  qualityScore: number;
+  sourceType: string;
 }
 
 interface ExistingClaimSignature {
-  id:               number;
-  category:         string;
-  questionKey:      string;
+  id: number;
+  category: string;
+  questionKey: string;
   resolutionUrlKey: string;
 }
 
 interface SportEvent {
-  id:            string;
-  name:          string;
-  startDate:     string;  // ISO 8601
-  startMs:       number;  // epoch ms (NaN if unparseable)
+  id: string;
+  name: string;
+  startDate: string;  // ISO 8601
+  startMs: number;  // epoch ms (NaN if unparseable)
   resolutionUrl: string;
-  status:        string;
+  status: string;
 }
 
 interface CryptoEvent {
-  id:            string;  // coingecko slug (e.g. "bitcoin")
-  name:          string;
-  symbol:        string;
+  id: string;  // coingecko slug (e.g. "bitcoin")
+  name: string;
+  symbol: string;
   resolutionUrl: string;
-  priceUsd:      number;
+  priceUsd: number;
 }
 
 interface StockEvent {
-  symbol:        string;  // ticker (e.g. "AAPL")
-  name:          string;
+  symbol: string;  // ticker (e.g. "AAPL")
+  name: string;
   resolutionUrl: string;  // stockanalysis.com page (oracle scrapes price/day change)
 }
 
@@ -209,9 +209,9 @@ function extractUsdThresholds(text: string): number[] {
       const suffix = match[2]?.toLowerCase();
       const multiplier = suffix === "k" ? 1_000
         : suffix === "m" ? 1_000_000
-        : suffix === "b" ? 1_000_000_000
-        : suffix === "t" ? 1_000_000_000_000
-        : 1;
+          : suffix === "b" ? 1_000_000_000
+            : suffix === "t" ? 1_000_000_000_000
+              : 1;
       const value = parsed * multiplier;
       const key = value.toString();
       if (!seen.has(key)) {
@@ -274,9 +274,9 @@ function normalizeResolutionUrl(value: string): string {
 
 function buildCandidateSignature(candidate: ClaimCandidate): ExistingClaimSignature {
   return {
-    id:               0,
-    category:         String(candidate.category ?? "").toLowerCase().trim(),
-    questionKey:      normalizeComparableText(String(candidate.question ?? "")),
+    id: 0,
+    category: String(candidate.category ?? "").toLowerCase().trim(),
+    questionKey: normalizeComparableText(String(candidate.question ?? "")),
     resolutionUrlKey: normalizeResolutionUrl(String(candidate.resolutionUrl ?? "")),
   };
 }
@@ -419,13 +419,13 @@ async function fetchCryptoEvents(): Promise<{ text: string; events: CryptoEvent[
     );
     const coins = await res.json() as any[];
     const events: CryptoEvent[] = (Array.isArray(coins) ? coins : []).map((c: any) => ({
-      id:            String(c.id ?? ""),
-      name:          String(c.name ?? ""),
-      symbol:        String(c.symbol ?? "").toUpperCase(),
+      id: String(c.id ?? ""),
+      name: String(c.name ?? ""),
+      symbol: String(c.symbol ?? "").toUpperCase(),
       // CoinGecko URLs with /coins/<slug> hit the deterministic API path in
       // lib/server/evidence-fetcher.ts. Always use the slug, never the symbol.
       resolutionUrl: c.id ? `https://www.coingecko.com/en/coins/${c.id}` : "",
-      priceUsd:      Number(c.current_price ?? 0),
+      priceUsd: Number(c.current_price ?? 0),
     })).filter((e) => e.id && e.resolutionUrl);
 
     const text = events.map((c) =>
@@ -473,12 +473,12 @@ async function fetchEspnScoreboard(
         )?.href;
         const resolutionUrl = post || `https://www.espn.com/${matchPath}/_/gameId/${e.id}`;
         return {
-          id:            String(e.id ?? ""),
-          name:          String(e.name ?? fallbackName),
-          startDate:     String(e.date ?? ""),
-          startMs:       Date.parse(String(e.date ?? "")),
+          id: String(e.id ?? ""),
+          name: String(e.name ?? fallbackName),
+          startDate: String(e.date ?? ""),
+          startMs: Date.parse(String(e.date ?? "")),
           resolutionUrl,
-          status:        String(e.status?.type?.detail ?? "scheduled"),
+          status: String(e.status?.type?.detail ?? "scheduled"),
         };
       })
       .filter((ev) =>
@@ -513,7 +513,7 @@ async function fetchSportsEvents(): Promise<{ text: string; events: SportEvent[]
   const events = [...worldCup, ...nba].slice(0, 8);
   if (events.length === 0) return { text: "No upcoming games found", events: [] };
 
-  const text = events.map((ev) => `${ev.name} — starts ${ev.startDate} — ${ev.status}`, { url: url, name: ev.name, startDate: ev.startDate, status: ev.status });.join("\n");
+  const text = events.map((ev) => `${ev.name} — starts ${ev.startDate} — ${ev.status}`).join("\n");
   return { text, events };
 }
 
@@ -532,8 +532,8 @@ const STOCK_TICKERS: Array<{ symbol: string; name: string }> = [
 
 function fetchStockEvents(): { text: string; events: StockEvent[] } {
   const events: StockEvent[] = STOCK_TICKERS.map((s) => ({
-    symbol:        s.symbol,
-    name:          s.name,
+    symbol: s.symbol,
+    name: s.name,
     resolutionUrl: `https://stockanalysis.com/stocks/${s.symbol.toLowerCase()}/`,
   }));
   const text = events.map((e) => `${e.name} (${e.symbol}) → ${e.resolutionUrl}`).join("\n");
@@ -543,16 +543,16 @@ function fetchStockEvents(): { text: string; events: StockEvent[] } {
 // ── Claude drafts claims ──────────────────────────────────────────────────────
 
 async function draftClaimCandidates(sourceData: {
-  cryptoText:   string;
+  cryptoText: string;
   cryptoEvents: CryptoEvent[];
-  sportsText:   string;
+  sportsText: string;
   sportsEvents: SportEvent[];
-  stocksText:   string;
+  stocksText: string;
   stocksEvents: StockEvent[];
-  weatherText:   string;
+  weatherText: string;
   weatherEvents: WeatherEvent[];
-  launchText:    string;
-  launchEvents:  LaunchEvent[];
+  launchText: string;
+  launchEvents: LaunchEvent[];
 }): Promise<ClaimCandidate[]> {
   const now = new Date();
 
@@ -665,7 +665,7 @@ Return a JSON array of ${MAX_CLAIMS_PER_RUN} candidates. Output JSON only.`;
   const stocksUrls = new Set(sourceData.stocksEvents.map((s) => s.resolutionUrl));
   const weatherUrls = new Set(sourceData.weatherEvents.map((w) => w.resolutionUrl));
   const launchUrls = new Map(sourceData.launchEvents.map((l) => [l.resolutionUrl, l]));
-  const nowMs      = Date.now();
+  const nowMs = Date.now();
 
   return candidates.filter((c) => {
     if (typeof c?.qualityScore !== "number" || c.qualityScore < MIN_QUALITY_SCORE) {
@@ -800,18 +800,18 @@ async function createClaim(candidate: ClaimCandidate): Promise<string | null> {
 
   try {
     const result = await createClaimOnChain(CREATOR.signer, {
-      question:              candidate.question,
-      creator_position:      candidate.creatorPosition,
-      counter_position:      candidate.counterPosition,
-      resolution_url:        candidate.resolutionUrl,
+      question: candidate.question,
+      creator_position: candidate.creatorPosition,
+      counter_position: candidate.counterPosition,
+      resolution_url: candidate.resolutionUrl,
       deadline,
-      stake_amount:          CREATOR_STAKE_USDC,
-      category:              candidate.category,
-      market_type:           candidate.marketType,
-      odds_mode:             "pool",
-      settlement_rule:       candidate.settlementRule,
-      max_challengers:       100,
-      visibility:            "public",
+      stake_amount: CREATOR_STAKE_USDC,
+      category: candidate.category,
+      market_type: candidate.marketType,
+      odds_mode: "pool",
+      settlement_rule: candidate.settlementRule,
+      max_challengers: 100,
+      visibility: "public",
       agent_owner_recipient: FEE_RECIPIENT,
     });
     logger.info(`[market-creator]   claim id #${result.claimId}`, { claimId: result.claimId });
@@ -840,7 +840,7 @@ async function sweepAndCount(): Promise<{ cancelled: number; joinable: number; j
     total = await getClaimCount();
   } catch (err) {
     logger.warn("[market-creator] Failed to read the claim count for sweep:", { error: err });
-    return { cancelled: 0, joinable: 0, joinableClaims: [] };
+    return { cancelled: 0, joinable: 0, joinableClaims: [], creatorExposureClaims: [] };
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -860,8 +860,8 @@ async function sweepAndCount(): Promise<{ cancelled: number; joinable: number; j
       joinable++;
       joinableClaims.push({
         id,
-        category:         claim.category.toLowerCase().trim(),
-        questionKey:      normalizeComparableText(claim.question),
+        category: claim.category.toLowerCase().trim(),
+        questionKey: normalizeComparableText(claim.question),
         resolutionUrlKey: normalizeResolutionUrl(claim.resolution_url),
       });
     }
@@ -885,7 +885,7 @@ async function sweepAndCount(): Promise<{ cancelled: number; joinable: number; j
     if (claim.state !== "open") continue;
     if (claim.deadline > now) continue;
 
-    console.log(`[market-creator] Cancelling stale claim #${id} (expired, no challenger)`, { id: id });
+    console.log(`[market-creator] Cancelling stale claim #${id} (expired, no challenger)`);
     try {
       const result = await cancelClaim(CREATOR.signer, id);
       logger.info(`[market-creator] ✓ Cancelled #${id} — ${result.explorerUrl ?? result.txHash}`, { id: id, explorerUrl: result.explorerUrl ?? result.txHash });
@@ -970,11 +970,11 @@ async function recordProposal(
 async function run(): Promise<void> {
   const balances = await readAgentBalances(CREATOR_ADDR);
 
-  console.log(`\n[market-creator] ── Run at ${new Date().toISOString()}`, { id: id, unsupported: JSON.stringify(mode.unsupported), sourceType: candidate.sourceType, toISOString: new Date().toISOString() });
+  console.log(`\n[market-creator] ── Run at ${new Date().toISOString()}`);
   logger.info(`[market-creator] Creator : ${CREATOR_ADDR}`, { CREATOR_ADDR: CREATOR_ADDR });
   console.log(
     `[market-creator] Balance : ${(balances.xlm ?? 0).toFixed(4)} XLM · ` +
-      `${balances.usdc === null ? "no USDC trustline" : `${balances.usdc.toFixed(4)} USDC`}`,
+    `${balances.usdc === null ? "no USDC trustline" : `${balances.usdc.toFixed(4)} USDC`}`,
   );
 
   // Single-pass sweep: cancels creator's stale expired-OPEN claims AND counts
@@ -990,6 +990,14 @@ async function run(): Promise<void> {
   logger.info(`[market-creator] Joinable on-chain: ${joinable} (cap: ${MAX_ACTIVE_CLAIMS})`, { joinable: joinable, MAX_ACTIVE_CLAIMS: MAX_ACTIVE_CLAIMS });
   if (joinable >= MAX_ACTIVE_CLAIMS) {
     logger.info(`[market-creator] Inventory ≥ cap — skipping this run.`);
+    return;
+  }
+  const openExposureUsdc = sumCreatorOpenExposure(creatorExposureClaims, CREATOR_ADDR);
+  const exposureSlots = marketsRemainingUnderCap(openExposureUsdc, CREATOR_STAKE_USDC, MAX_OPEN_EXPOSURE_USDC);
+  if (exposureSlots === 0) {
+    logger.info(
+      `[market-creator] Exposure cap reached (${openExposureUsdc.toFixed(2)} USDC open, max ${MAX_OPEN_EXPOSURE_USDC}) — skipping this run.`,
+    );
     return;
   }
   const headroom = Math.max(0, MAX_ACTIVE_CLAIMS - joinable);
@@ -1012,16 +1020,16 @@ async function run(): Promise<void> {
 
   logger.info("[market-creator] Drafting claim candidates...");
   const draftedCandidates = await draftClaimCandidates({
-    cryptoText:   crypto.text,
+    cryptoText: crypto.text,
     cryptoEvents: crypto.events,
-    sportsText:   sports.text,
+    sportsText: sports.text,
     sportsEvents: sports.events,
-    stocksText:   stocks.text,
+    stocksText: stocks.text,
     stocksEvents: stocks.events,
-    weatherText:   weather.text,
+    weatherText: weather.text,
     weatherEvents: weather.events,
-    launchText:    launches.text,
-    launchEvents:  launches.events,
+    launchText: launches.text,
+    launchEvents: launches.events,
   });
   const candidates = filterDuplicateCandidates(draftedCandidates, joinableClaims);
 
@@ -1055,7 +1063,7 @@ async function run(): Promise<void> {
     if (!exposureGate.allowed) {
       console.log(
         `[market-creator] Exposure cap blocks further creates — ${exposureGate.blockedBy} ` +
-          `(policy max ${CREATOR_POLICY.maxOpenExposureUsdc} USDC).`,
+        `(policy max ${CREATOR_POLICY.maxOpenExposureUsdc} USDC).`,
       );
       break;
     }
@@ -1069,7 +1077,7 @@ async function run(): Promise<void> {
       // against human review. Nothing is published, and the proposal says why.
       console.log(
         `[market-creator] SHADOW — proposed only, not published: "${candidate.question.slice(0, 60)}..." ` +
-          `(proposal ${proposalId ?? "unrecorded"})`,
+        `(proposal ${proposalId ?? "unrecorded"})`,
       );
       continue;
     }
@@ -1092,7 +1100,7 @@ async function run(): Promise<void> {
   if (SHADOW_MODE) {
     console.log(
       `[market-creator] SHADOW MODE — ${selected.length} proposal(s) recorded, 0 published. ` +
-        `Set MARKET_CREATOR_AUTONOMOUS=1 once review precision has been measured.`,
+      `Set MARKET_CREATOR_AUTONOMOUS=1 once review precision has been measured.`,
     );
   } else {
     logger.info(`\n[market-creator] Created ${created}/${approvedCandidates.length} approved markets this run.`, { created: created, length: approvedCandidates.length });
@@ -1114,14 +1122,14 @@ async function main(): Promise<void> {
   logger.info(`  Contract   : ${CONTRACT_ID}`, { CONTRACT_ID: CONTRACT_ID });
   logger.info(`  Creator    : ${CREATOR_ADDR}`, { CREATOR_ADDR: CREATOR_ADDR });
   logger.info(`  Fees       : ${(balances.xlm ?? 0).toFixed(4)} XLM`, { xlm: (balances.xlm ?? 0).toFixed(4) });
-  logger.info(`  Bankroll   : ${balances.usdc === null ? "no USDC trustline" : `${balances.usdc.toFixed(4)} USDC`}`, { toFixed4: balances.usdc === null ? "no USDC trustline" : `${balances.usdc.toFixed(4) });
+  logger.info(`  Bankroll   : ${balances.usdc === null ? "no USDC trustline" : `${balances.usdc.toFixed(4)} USDC`}`);
   logger.info(`  Fee to     : ${FEE_RECIPIENT ?? "(none — markets pay no agent-owner fee)"}`, { FEE_RECIPIENT: FEE_RECIPIENT ?? "(none — markets pay no agent-owner fee)" });
   logger.info(`  Network    : Stellar ${STELLAR_NETWORK}`, { STELLAR_NETWORK: STELLAR_NETWORK });
   logger.info(`  LLM        : ${activeLLMProvider()} / ${activeLLMModel()} · key=${activeLLMKeyFingerprint()}`, { activeLLMProvider: activeLLMProvider(), activeLLMModel: activeLLMModel(), activeLLMKeyFingerprint: activeLLMKeyFingerprint() });
   logger.info(`  Stake/mkt  : ${CREATOR_STAKE_USDC} USDC`, { CREATOR_STAKE_USDC: CREATOR_STAKE_USDC });
   logger.info(`  Max/run    : ${MAX_CLAIMS_PER_RUN} claims`, { MAX_CLAIMS_PER_RUN: MAX_CLAIMS_PER_RUN });
   logger.info(`  Active cap : ${MAX_ACTIVE_CLAIMS} unresolved (skip run above this)`, { MAX_ACTIVE_CLAIMS: MAX_ACTIVE_CLAIMS });
-  logger.info(`  Preflight  : ${PREFLIGHT_ENABLED ? `on via ${PREFLIGHT_BASE_URL}` : "off"}`, { PREFLIGHT_ENABLEDonviaPREFLIGHT_BASE_URL: PREFLIGHT_ENABLED ? `on via ${PREFLIGHT_BASE_URL });
+  logger.info(`  Preflight  : ${PREFLIGHT_ENABLED ? `on via ${PREFLIGHT_BASE_URL}` : "off"}`);
   logger.info(`  Create gap : ${CREATE_DELAY_MS / 1000}s`, { CREATE_DELAY_MS1000: CREATE_DELAY_MS / 1000 });
   logger.info(`  Cancel gap : ${CANCEL_DELAY_MS / 1000}s`, { CANCEL_DELAY_MS1000: CANCEL_DELAY_MS / 1000 });
   logger.info(`  Interval   : every ${RUN_INTERVAL_HOURS}h`, { RUN_INTERVAL_HOURS: RUN_INTERVAL_HOURS });

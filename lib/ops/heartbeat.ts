@@ -105,13 +105,32 @@ export async function reportingPoll(
   poll: () => Promise<unknown>,
   opts: { pause?: Pausable; env?: Record<string, string | undefined> } = {},
 ): Promise<void> {
-  try {
-    await poll();
-    await beat(worker, { intervalSec });
-  } catch (err) {
-    logger.error(`poll failed, will retry next interval`, { error: err, label });
-    await beat(worker, { error: err, intervalSec });
-  }
+  // Each cycle gets its own trace so the heartbeat row names the id to grep for.
+  await runWithTrace(mintTraceId(), async () => {
+    const span = startSpan("poll", { attributes: { label } });
+    try {
+      // Pause gate: skip the user-visible work but keep beating so a deliberate
+      // stop is not misread as a dead worker by the health evaluator.
+      if (opts.pause) {
+        const env = opts.env ?? {};
+        const state = pauseState(opts.pause, env);
+        if (state.paused) {
+          logger.info(`poll paused`, { label, reason: state.reason });
+          await beat(worker, { intervalSec });
+          endSpan(span, { status: "cancelled" });
+          return;
+        }
+      }
+
+      await poll();
+      await beat(worker, { intervalSec });
+      endSpan(span);
+    } catch (err) {
+      logger.error(`poll failed, will retry next interval`, { error: err, label });
+      await beat(worker, { error: err, intervalSec });
+      endSpan(span, { error: err });
+    }
+  });
 }
 
 function describe(error: unknown): string {
